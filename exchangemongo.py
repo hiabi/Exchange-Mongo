@@ -9,7 +9,6 @@ from io import BytesIO
 from pymongo import MongoClient
 import uuid
 
-# === MongoDB connection with fallback ===
 @st.cache_resource
 def get_mongo_collection():
     client = MongoClient(st.secrets["mongo"]["uri"])
@@ -22,7 +21,6 @@ except Exception as e:
     st.warning("⚠️ MongoDB not connected. Uploads will not be stored.")
     mongo_collection = None
 
-# === Load Excel with Offers and Wants ===
 def load_offer_want_excel(file):
     xls = pd.ExcelFile(file)
     offers = xls.parse(xls.sheet_names[0])
@@ -45,7 +43,6 @@ def load_offer_want_excel(file):
     want_data = wants[['full_name', 'precio']].to_dict('records')
     return offer_data, want_data
 
-# === Save to MongoDB ===
 def save_user_data_to_mongo(offers, wants):
     user_id = str(uuid.uuid4())
     mongo_collection.insert_one({
@@ -56,7 +53,6 @@ def save_user_data_to_mongo(offers, wants):
     })
     return user_id
 
-# === Load all uploads ===
 def load_all_requests_from_mongo():
     data = mongo_collection.find()
     requests = []
@@ -70,7 +66,6 @@ def load_all_requests_from_mongo():
         })
     return requests
 
-# === Build graph ===
 def build_graph(requests):
     G = nx.DiGraph()
     for req in requests:
@@ -85,7 +80,6 @@ def build_graph(requests):
 
     return G
 
-# === Hybrid cycle extraction with duplication prevention ===
 def sample_cycles_hybrid(G, request_map, max_len=10):
     all_cycles = []
     used_nodes = set()
@@ -132,7 +126,6 @@ def sample_cycles_hybrid(G, request_map, max_len=10):
                             stack.append((neighbor, path + [neighbor]))
     return all_cycles
 
-# === Offer conflict check ===
 def violates_offer_conflict(cycle, request_map, used_offers):
     for i in range(len(cycle) - 1):
         giver_id = cycle[i]
@@ -148,7 +141,6 @@ def violates_offer_conflict(cycle, request_map, used_offers):
                     used_offers.add(key)
     return False
 
-# === Describe cycles ===
 def describe_cycles(cycles, request_map):
     all_cycles = []
     user_cycles = []
