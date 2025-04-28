@@ -62,7 +62,6 @@ if st.button("Run Matching"):
                 'status': 'pending'
             })
             
-# === Build graph ===
 def build_graph(requests):
     G = nx.DiGraph()
     for req in requests:
@@ -77,7 +76,6 @@ def build_graph(requests):
 
     return G
 
-# === Hybrid cycle extraction with duplication prevention ===
 def sample_cycles_hybrid(G, request_map, max_len=10):
     all_cycles = []
     used_nodes = set()
@@ -124,7 +122,6 @@ def sample_cycles_hybrid(G, request_map, max_len=10):
                             stack.append((neighbor, path + [neighbor]))
     return all_cycles
 
-# === Offer conflict check ===
 def violates_offer_conflict(cycle, request_map, used_offers):
     for i in range(len(cycle) - 1):
         giver_id = cycle[i]
@@ -140,7 +137,6 @@ def violates_offer_conflict(cycle, request_map, used_offers):
                     used_offers.add(key)
     return False
 
-# === Describe cycles ===
 def describe_cycles(cycles, request_map):
     all_cycles = []
     user_cycles = []
@@ -169,7 +165,6 @@ def describe_cycles(cycles, request_map):
 
     return pd.DataFrame(all_cycles), pd.DataFrame(user_cycles)
 
-# === Streamlit App ===
 st.title("🚗 Upload Your Car Exchange Data")
 
 if mongo_collection is None:
@@ -178,13 +173,11 @@ if mongo_collection is None:
 
 st.info("Please upload your Excel file with two sheets: 'Offers' and 'Wants'.")
 
-# Input user info
 name = st.text_input("Enter your Name")
 agency_id = st.text_input("Enter your Agency ID")
 
 user_file = st.file_uploader("📤 Upload your Excel file:", type=['xlsx'])
 
-# Validation and upload
 if st.button("Upload File"):
     if not name.strip() or not agency_id.strip():
         st.error("Please fill both your Name and your Agency ID before uploading.")
