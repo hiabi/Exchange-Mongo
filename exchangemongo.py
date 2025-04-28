@@ -1,4 +1,5 @@
-#Mejorado
+#Versión final
+#Password for all uploads reset: 050699
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,61 +12,57 @@ import uuid
 
 @st.cache_resource
 def get_mongo_collection():
+    from pymongo import MongoClient
     client = MongoClient(st.secrets["mongo"]["uri"])
-    db = client["car_exchange"]
-    return db["uploads"]
+    db = client.car_exchange
+    collection = db.user_uploads
+    return collection
 
-try:
-    mongo_collection = get_mongo_collection()
-except Exception as e:
-    st.warning("⚠️ MongoDB not connected. Uploads will not be stored.")
-    mongo_collection = None
+mongo_collection = get_mongo_collection() if "mongo" in st.secrets else None
 
 def load_offer_want_excel(file):
     xls = pd.ExcelFile(file)
-    offers = xls.parse(xls.sheet_names[0])
-    wants = xls.parse(xls.sheet_names[1])
+    offers = pd.read_excel(xls, 'Offers')
+    wants = pd.read_excel(xls, 'Wants')
+    return offers.to_dict('records'), wants.to_dict('records')
 
-    offers = offers.dropna(subset=['MODELO', 'VERSION'])
-    wants = wants.dropna(subset=['MODELO', 'VERSION'])
+def save_user_data_to_mongo(offers, wants, name, agency_id):
+    mongo_collection.update_one(
+        {"agency_id": agency_id},
+        {
+            "$push": {
+                "uploads": {
+                    "offers": offers,
+                    "wants": wants,
+                    "uploaded_at": datetime.datetime.now()
+                }
+            },
+            "$setOnInsert": {
+                "user_id": str(uuid.uuid4()),
+                "name": name,
+                "agency_id": agency_id
+            }
+        },
+        upsert=True
+    )
 
-    offers['modelo'] = offers['MODELO'].str.upper()
-    offers['version'] = offers['VERSION'].str.upper()
-    offers['full_name'] = offers['modelo'] + " - " + offers['version']
-    offers['precio'] = offers['PRECIO'] if 'PRECIO' in offers else np.random.randint(200_000, 600_000, size=len(offers))
+st.markdown("---")
+st.header("🔄 Run Matching Across All Uploads")
 
-    wants['modelo'] = wants['MODELO'].str.upper()
-    wants['version'] = wants['VERSION'].str.upper()
-    wants['full_name'] = wants['modelo'] + " - " + wants['version']
-    wants['precio'] = wants['PRECIO'] if 'PRECIO' in wants else np.random.randint(200_000, 600_000, size=len(wants))
-
-    offer_data = offers[['full_name', 'precio']].to_dict('records')
-    want_data = wants[['full_name', 'precio']].to_dict('records')
-    return offer_data, want_data
-
-def save_user_data_to_mongo(offers, wants):
-    user_id = str(uuid.uuid4())
-    mongo_collection.insert_one({
-        "user_id": user_id,
-        "offers": offers,
-        "wants": wants,
-        "uploaded_at": datetime.datetime.utcnow()
-    })
-    return user_id
-
-def load_all_requests_from_mongo():
-    data = mongo_collection.find()
+if st.button("Run Matching"):
     requests = []
-    for idx, entry in enumerate(data):
-        requests.append({
-            'id': idx,
-            'offers': entry['offers'],
-            'wants': entry['wants'],
-            'created_at': entry.get('uploaded_at', datetime.datetime.utcnow()),
-            'status': 'pending'
-        })
-    return requests
-
+    participants = mongo_collection.find({})
+    for user in participants:
+        for upload in user.get("uploads", []):
+            requests.append({
+                'id': user['agency_id'],  # or user['user_id'] if you want
+                'offers': upload.get('offers', []),
+                'wants': upload.get('wants', []),
+                'created_at': upload.get('uploaded_at', datetime.datetime.now()),
+                'status': 'pending'
+            })
+            
+# === Build graph ===
 def build_graph(requests):
     G = nx.DiGraph()
     for req in requests:
@@ -80,6 +77,7 @@ def build_graph(requests):
 
     return G
 
+# === Hybrid cycle extraction with duplication prevention ===
 def sample_cycles_hybrid(G, request_map, max_len=10):
     all_cycles = []
     used_nodes = set()
@@ -126,6 +124,7 @@ def sample_cycles_hybrid(G, request_map, max_len=10):
                             stack.append((neighbor, path + [neighbor]))
     return all_cycles
 
+# === Offer conflict check ===
 def violates_offer_conflict(cycle, request_map, used_offers):
     for i in range(len(cycle) - 1):
         giver_id = cycle[i]
@@ -141,6 +140,7 @@ def violates_offer_conflict(cycle, request_map, used_offers):
                     used_offers.add(key)
     return False
 
+# === Describe cycles ===
 def describe_cycles(cycles, request_map):
     all_cycles = []
     user_cycles = []
@@ -169,55 +169,29 @@ def describe_cycles(cycles, request_map):
 
     return pd.DataFrame(all_cycles), pd.DataFrame(user_cycles)
 
-st.title("🚗 Car Exchange Program - Multiuser Upload")
+# === Streamlit App ===
+st.title("🚗 Upload Your Car Exchange Data")
 
-st.markdown("""
-### Upload Your Offer/Wants File
-Upload an Excel file with **two sheets**:
-- Sheet 1: Your offers (with columns 'MODELO', 'VERSION', optional 'PRECIO')
-- Sheet 2: Your wants (same format)
-Your data will be added to the system and used in the next matching cycle.
-""")
+if mongo_collection is None:
+    st.error("MongoDB is not configured. Please check your secrets.")
+    st.stop()
 
-if mongo_collection is not None:
-    user_file = st.file_uploader("📤 Upload Excel File (2 sheets)", type=['xlsx'])
+st.info("Please upload your Excel file with two sheets: 'Offers' and 'Wants'.")
 
-    if user_file:
-        offers, wants = load_offer_want_excel(user_file)
-        save_user_data_to_mongo(offers, wants)
-        st.success(f"✅ Upload successful. {len(offers)} offers and {len(wants)} wants saved.")
-else:
-    st.info("📂 Uploading is temporarily disabled because database is offline.")
+# Input user info
+name = st.text_input("Enter your Name")
+agency_id = st.text_input("Enter your Agency ID")
 
-st.markdown("---")
-st.markdown("""
-### Admin Only: Run Matching Now
-This will use all stored uploads from all users and compute the current exchange cycles.
-""")
+user_file = st.file_uploader("📤 Upload your Excel file:", type=['xlsx'])
 
-if st.button("🧮 Run Matching Across All Uploads"):
-    if mongo_collection is not None:
-        all_requests = load_all_requests_from_mongo()
-        request_map = {r['id']: r for r in all_requests}
-        G = build_graph(all_requests)
-        cycles = sample_cycles_hybrid(G, request_map)
-        df_all, _ = describe_cycles(cycles, request_map)
-
-        st.subheader("🔄 Preview of Exchange Cycles")
-        st.dataframe(df_all.head(10))
-
-        output = BytesIO()
-        df_all.to_csv(output, index=False)
-        st.download_button("📥 Download All Exchange Cycles", data=output.getvalue(), file_name="exchange_cycles.csv", mime="text/csv")
+# Validation and upload
+if st.button("Upload File"):
+    if not name.strip() or not agency_id.strip():
+        st.error("Please fill both your Name and your Agency ID before uploading.")
+    elif not user_file:
+        st.error("Please select an Excel file to upload.")
     else:
-        st.error("❌ Database not connected. Cannot run matching.")
-
-st.markdown("---")
-with st.expander("⚠️ Admin Only: Danger Zone - Reset All Uploads"):
-    password = st.text_input("Enter Admin Password to Reset:", type="password")
-    if st.button("🗑️ Clear ALL uploaded data"):
-        if password == "050699":
-            mongo_collection.delete_many({})
-            st.warning("All data has been deleted from MongoDB uploads collection.")
-        else:
-            st.error("❌ Incorrect password. Access denied.")
+        offers, wants = load_offer_want_excel(user_file)
+        save_user_data_to_mongo(offers, wants, name, agency_id)
+        st.success(f"✅ Upload successful! {len(offers)} offers and {len(wants)} wants saved.")
+        st.balloons()
