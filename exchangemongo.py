@@ -188,3 +188,31 @@ if st.button("Upload File"):
         save_user_data_to_mongo(offers, wants, name, agency_id)
         st.success(f"✅ Upload successful! {len(offers)} offers and {len(wants)} wants saved.")
         st.balloons()
+
+if st.button("🧮 Run Matching Across All Uploads"):
+    if mongo_collection is not None:
+        all_requests = load_all_requests_from_mongo()
+        request_map = {r['id']: r for r in all_requests}
+        G = build_graph(all_requests)
+        cycles = sample_cycles_hybrid(G, request_map)
+        df_all, _ = describe_cycles(cycles, request_map)
+
+        st.subheader("🔄 Preview of Exchange Cycles")
+        st.dataframe(df_all.head(10))
+
+        output = BytesIO()
+        df_all.to_csv(output, index=False)
+        st.download_button("📥 Download All Exchange Cycles", data=output.getvalue(), file_name="exchange_cycles.csv", mime="text/csv")
+    else:
+        st.error("❌ Database not connected. Cannot run matching.")
+
+
+st.markdown("---")
+with st.expander("⚠️ Admin Only: Danger Zone - Reset All Uploads"):
+    password = st.text_input("Enter Admin Password to Reset:", type="password")
+    if st.button("🗑️ Clear ALL uploaded data"):
+        if password == "050699":
+            mongo_collection.delete_many({})
+            st.warning("All data has been deleted from MongoDB uploads collection.")
+        else:
+            st.error("❌ Incorrect password. Access denied.")
