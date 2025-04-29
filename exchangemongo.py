@@ -49,14 +49,26 @@ def load_all_requests_from_mongo():
     participants = mongo_collection.find({})
     for user in participants:
         for upload in user.get("uploads", []):
+            # Add full_name field dynamically
+            offers = upload.get('offers', [])
+            wants = upload.get('wants', [])
+
+            for offer in offers:
+                if 'full_name' not in offer and 'MODELO' in offer and 'VERSION' in offer:
+                    offer['full_name'] = offer['MODELO'].strip().upper() + " - " + offer['VERSION'].strip().upper()
+            for want in wants:
+                if 'full_name' not in want and 'MODELO' in want and 'VERSION' in want:
+                    want['full_name'] = want['MODELO'].strip().upper() + " - " + want['VERSION'].strip().upper()
+
             requests.append({
-                'id': user['agency_id'],  # You can change to user['user_id'] if you prefer internal IDs
-                'offers': upload.get('offers', []),
-                'wants': upload.get('wants', []),
+                'id': user['agency_id'],
+                'offers': offers,
+                'wants': wants,
                 'created_at': upload.get('uploaded_at', datetime.datetime.now()),
                 'status': 'pending'
             })
     return requests
+
 
 def build_graph(requests):
     G = nx.DiGraph()
