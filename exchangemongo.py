@@ -1,5 +1,4 @@
-#Versión final
-#Password for all uploads reset: 050699
+# Versión final corregida
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,7 +11,6 @@ import uuid
 
 @st.cache_resource
 def get_mongo_collection():
-    from pymongo import MongoClient
     client = MongoClient(st.secrets["mongo"]["uri"])
     db = client.car_exchange
     collection = db.user_uploads
@@ -46,22 +44,20 @@ def save_user_data_to_mongo(offers, wants, name, agency_id):
         upsert=True
     )
 
-st.markdown("---")
-st.header("🔄 Run Matching Across All Uploads")
-
-if st.button("Run Matching"):
+def load_all_requests_from_mongo():
     requests = []
     participants = mongo_collection.find({})
     for user in participants:
         for upload in user.get("uploads", []):
             requests.append({
-                'id': user['agency_id'],  # or user['user_id'] if you want
+                'id': user['agency_id'],  # You can change to user['user_id'] if you prefer internal IDs
                 'offers': upload.get('offers', []),
                 'wants': upload.get('wants', []),
                 'created_at': upload.get('uploaded_at', datetime.datetime.now()),
                 'status': 'pending'
             })
-            
+    return requests
+
 def build_graph(requests):
     G = nx.DiGraph()
     for req in requests:
@@ -73,8 +69,22 @@ def build_graph(requests):
                 continue
             if any(o['full_name'].lower() == w['full_name'].lower() for o in req_a['offers'] for w in req_b['wants']):
                 G.add_edge(req_a['id'], req_b['id'])
-
     return G
+
+def violates_offer_conflict(cycle, request_map, used_offers):
+    for i in range(len(cycle) - 1):
+        giver_id = cycle[i]
+        receiver_id = cycle[i + 1]
+        giver = request_map[giver_id]
+        receiver = request_map[receiver_id]
+        for offer in giver['offers']:
+            for want in receiver['wants']:
+                if offer['full_name'].lower() == want['full_name'].lower():
+                    key = (giver_id, offer['full_name'])
+                    if key in used_offers:
+                        return True
+                    used_offers.add(key)
+    return False
 
 def sample_cycles_hybrid(G, request_map, max_len=10):
     all_cycles = []
@@ -122,21 +132,6 @@ def sample_cycles_hybrid(G, request_map, max_len=10):
                             stack.append((neighbor, path + [neighbor]))
     return all_cycles
 
-def violates_offer_conflict(cycle, request_map, used_offers):
-    for i in range(len(cycle) - 1):
-        giver_id = cycle[i]
-        receiver_id = cycle[i + 1]
-        giver = request_map[giver_id]
-        receiver = request_map[receiver_id]
-        for offer in giver['offers']:
-            for want in receiver['wants']:
-                if offer['full_name'].lower() == want['full_name'].lower():
-                    key = (giver_id, offer['full_name'])
-                    if key in used_offers:
-                        return True
-                    used_offers.add(key)
-    return False
-
 def describe_cycles(cycles, request_map):
     all_cycles = []
     user_cycles = []
@@ -165,54 +160,52 @@ def describe_cycles(cycles, request_map):
 
     return pd.DataFrame(all_cycles), pd.DataFrame(user_cycles)
 
-st.title("🚗 Upload Your Car Exchange Data")
+
+st.title("🚗 Car Exchange Platform")
 
 if mongo_collection is None:
-    st.error("MongoDB is not configured. Please check your secrets.")
+    st.error("MongoDB not connected.")
     st.stop()
 
-st.info("Please upload your Excel file with two sheets: 'Offers' and 'Wants'.")
-
+st.header("📤 Upload Your Offers and Wants")
 name = st.text_input("Enter your Name")
 agency_id = st.text_input("Enter your Agency ID")
-
-user_file = st.file_uploader("📤 Upload your Excel file:", type=['xlsx'])
+user_file = st.file_uploader("Upload Excel file (Offers/Wants):", type=["xlsx"])
 
 if st.button("Upload File"):
     if not name.strip() or not agency_id.strip():
-        st.error("Please fill both your Name and your Agency ID before uploading.")
+        st.error("Please fill Name and Agency ID.")
     elif not user_file:
-        st.error("Please select an Excel file to upload.")
+        st.error("Please select a file to upload.")
     else:
         offers, wants = load_offer_want_excel(user_file)
         save_user_data_to_mongo(offers, wants, name, agency_id)
-        st.success(f"✅ Upload successful! {len(offers)} offers and {len(wants)} wants saved.")
+        st.success(f"Uploaded {len(offers)} offers and {len(wants)} wants.")
         st.balloons()
 
-if st.button("🧮 Run Matching Across All Uploads"):
-    if mongo_collection is not None:
-        all_requests = load_all_requests_from_mongo()
-        request_map = {r['id']: r for r in all_requests}
-        G = build_graph(all_requests)
-        cycles = sample_cycles_hybrid(G, request_map)
-        df_all, _ = describe_cycles(cycles, request_map)
+st.markdown("---")
+st.header("🔄 Run Matching Across All Current Uploads")
 
-        st.subheader("🔄 Preview of Exchange Cycles")
-        st.dataframe(df_all.head(10))
+if st.button("🧮 Find Exchange Cycles"):
+    all_requests = load_all_requests_from_mongo()
+    request_map = {r['id']: r for r in all_requests}
+    G = build_graph(all_requests)
+    cycles = sample_cycles_hybrid(G, request_map)
+    df_all, _ = describe_cycles(cycles, request_map)
 
-        output = BytesIO()
-        df_all.to_csv(output, index=False)
-        st.download_button("📥 Download All Exchange Cycles", data=output.getvalue(), file_name="exchange_cycles.csv", mime="text/csv")
-    else:
-        st.error("❌ Database not connected. Cannot run matching.")
+    st.subheader("🔍 Exchange Cycles Preview")
+    st.dataframe(df_all.head(10))
 
+    output = BytesIO()
+    df_all.to_csv(output, index=False)
+    st.download_button("📥 Download All Cycles", data=output.getvalue(), file_name="exchange_cycles.csv", mime="text/csv")
 
 st.markdown("---")
-with st.expander("⚠️ Admin Only: Danger Zone - Reset All Uploads"):
-    password = st.text_input("Enter Admin Password to Reset:", type="password")
-    if st.button("🗑️ Clear ALL uploaded data"):
+with st.expander("⚠️ Danger Zone - Admin Only"):
+    password = st.text_input("Admin Password to Reset:", type="password")
+    if st.button("🗑️ Clear All Uploads"):
         if password == "050699":
             mongo_collection.delete_many({})
-            st.warning("All data has been deleted from MongoDB uploads collection.")
+            st.warning("All uploads have been cleared.")
         else:
-            st.error("❌ Incorrect password. Access denied.")
+            st.error("Incorrect password.")
